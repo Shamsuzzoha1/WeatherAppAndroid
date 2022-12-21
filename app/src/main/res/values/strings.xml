@@ -5,4 +5,5 @@
     <string name="ok">ok</string>
     <string name="city_input_hint">Enter City Name</string>
     <string name="weather_condition">weather condition</string>
+    <string name="default_city">New Delhi</string>
 </resources>

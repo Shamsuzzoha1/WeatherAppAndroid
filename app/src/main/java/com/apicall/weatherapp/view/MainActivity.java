@@ -1,47 +1,41 @@
 package com.apicall.weatherapp.view;
 
 import android.Manifest;
-import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
+import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.ImageView;
-import android.widget.ProgressBar;
-import android.widget.RelativeLayout;
-import android.widget.TextView;
+import android.widget.AdapterView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.lifecycle.ViewModelProvider;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
 import com.apicall.weatherapp.R;
 import com.apicall.weatherapp.databinding.ActivityMainBinding;
+import com.apicall.weatherapp.model.CityAutocom;
 import com.apicall.weatherapp.model.Constant;
-import com.apicall.weatherapp.model.Forecast;
-import com.apicall.weatherapp.model.Hour;
 import com.apicall.weatherapp.model.Latlong;
 import com.apicall.weatherapp.viewmodel.CityTempViewModel;
 import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationAvailability;
 import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.location.Priority;
-import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
     private ActivityMainBinding binding;
@@ -49,6 +43,10 @@ public class MainActivity extends AppCompatActivity {
     public static final int MY_PERMISSIONS_REQUEST_LOCATION = 99;
     public static Latlong devicesLocationLatLong;
     CityTempViewModel cityTempViewModel;
+    private AutoSuggestAdapter autoSuggestAdapter;
+    private static final int TRIGGER_AUTO_COMPLETE = 100;
+    private static final long AUTO_COMPLETE_DELAY = 300;
+    private Handler handler;
 
     /*
      * Flow is like this
@@ -61,10 +59,10 @@ public class MainActivity extends AppCompatActivity {
      * */
 
     /*
-    * User type the city name and click on search
-    * app will get the city name value from text_input
-    *
-    * */
+     * User type the city name and click on search
+     * app will get the city name value from text_input
+     * app will call the search api
+     * */
 
 
     TilesAdapter tilesAdapter;
@@ -83,23 +81,34 @@ public class MainActivity extends AppCompatActivity {
 
         tilesAdapter = new TilesAdapter(this, new ArrayList<>());
 
+        //auto-suggest adapter
+        autoSuggestAdapter = new AutoSuggestAdapter(this, R.layout.single_autosuggest_item);
+        binding.idActvCity.setThreshold(2);
+        binding.idActvCity.setAdapter(autoSuggestAdapter);
+
         cityTempViewModel = new ViewModelProvider(this).get(CityTempViewModel.class);
+
         cityTempViewModel.getCityTempLiveData().observe(this, cityTemp -> {
-            String cityNameText = cityTemp.getLocation().getName();
+            //
+            String cityNameText = cityTemp.getLocation().getName() + ", " + cityTemp.getLocation().getRegion();
             String cityTempCelsiusText = cityTemp.getCurrent().getTempC().intValue() + "°C";
             String imageURL = "https:" + cityTemp.getCurrent().getCondition().getIcon();
             String cityConditionText = cityTemp.getCurrent().getCondition().getText();
             Integer isDay = cityTemp.getCurrent().getIsDay();
+
+            //setting new data to the Tiles Adapter
             tilesAdapter.setData(cityTemp.getForecast().getForecastday().get(0).getHour());
+
+            //
             binding.idTVCityName.setText(cityNameText);
             Log.d(Constant.LOG_TAG + "s", String.valueOf(cityTemp.getForecast().getForecastday().get(0).getHour().size()));
-
             binding.idTVTemperature.setText(cityTempCelsiusText);
             Util.loadImage(binding.idIVIcon, imageURL);
             binding.idTVCondition.setText(cityConditionText);
             binding.idRVWeather.setHasFixedSize(true);
             binding.idRVWeather.setAdapter(tilesAdapter);
 
+            //background change for day and night
             if (isDay == 1) {
                 binding.idIVBack.setImageResource(R.drawable.day2);
             } else {
@@ -116,14 +125,56 @@ public class MainActivity extends AppCompatActivity {
         super.onStart();
 
         binding.idIVSearch.setOnClickListener(view -> {
-            Editable inputText = binding.idEdtCity.getText();
+            Editable inputText = binding.idActvCity.getText();
             assert inputText != null;
             String cityName = inputText.toString();
-            cityTempViewModel.callWeatherApi(cityName);
+            cityTempViewModel.callWeatherAPIByName(cityName);
+            //todo add loading when clicked on this
+            binding.idPBLoading.setVisibility(View.VISIBLE);
+            binding.idRLHome.setVisibility(View.GONE);
         });
 
-        //binding.idEdtCity.setOn
-        getResources().getStringArray(R.array.)
+        binding.idActvCity.setOnItemClickListener(
+                (parent, view, position, id) -> {
+                    CityAutocom cityAutocomObject = autoSuggestAdapter.getObject(position);
+                    String cityInfoText = cityAutocomObject.getName() + ", " + cityAutocomObject.getRegion() + ", " + cityAutocomObject.getCountry();
+                    binding.idActvCity.setText(cityInfoText);
+                });
+
+        binding.idActvCity.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence charSequence, int i, int i1, int i2) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence charSequence, int i, int i1, int i2) {
+                handler.removeMessages(TRIGGER_AUTO_COMPLETE);
+                handler.sendEmptyMessageDelayed(TRIGGER_AUTO_COMPLETE,
+                        AUTO_COMPLETE_DELAY);
+            }
+
+            @Override
+            public void afterTextChanged(Editable editable) {
+            }
+        });
+
+        handler = new Handler(message -> {
+            if (message.what == TRIGGER_AUTO_COMPLETE) {
+                if (!TextUtils.isEmpty(binding.idActvCity.getText())) {
+                    cityTempViewModel.callAutocompleteApi(binding.idActvCity.getText().toString());
+                }
+            }
+            return false;
+        });
+
+        //Temp Code
+        cityTempViewModel.getCityAutocompleteLiveData().observe(this, cityAutocoms -> {
+            Log.d(Constant.LOG_TAG, cityAutocoms.get(0).getName());
+            autoSuggestAdapter.setData(cityAutocoms);
+            autoSuggestAdapter.notifyDataSetChanged();
+            binding.idPBLoading.setVisibility(View.GONE);
+            binding.idRLHome.setVisibility(View.VISIBLE);
+        });
     }
 
     @Override
@@ -157,39 +208,41 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setLocationListener() {
-        LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, (long) Math.pow(10, 6))
+        LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, (long) Math.pow(10, 3))
+                .setMaxUpdates(1)
                 .setWaitForAccurateLocation(false)
                 .setMinUpdateIntervalMillis(500)
-                .setMaxUpdateDelayMillis((long) Math.pow(10, 6)).build();
+                .setMaxUpdateDelayMillis((long) Math.pow(10, 3)).build();
 
         if (PermissionUtils.checkAccessFineLocationGranted(this)) {
-            Log.d(Constant.LOG_TAG + "k", "this ran");
 
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 Log.d(Constant.LOG_TAG + "z", "No permissions");
                 return;
             }
 
-            Log.d(Constant.LOG_TAG + "m", "this ran also");
+            if (PermissionUtils.checkAccessFineLocationGranted(this)) {
 
+                fusedLocationProviderClient.requestLocationUpdates(locationRequest, new LocationCallback() {
+                    @Override
+                    public void onLocationResult(@NonNull LocationResult locationResult) {
+                        super.onLocationResult(locationResult);
 
-            fusedLocationProviderClient.requestLocationUpdates(locationRequest, new LocationCallback() {
-                @Override
-                public void onLocationResult(@NonNull LocationResult locationResult) {
-                    super.onLocationResult(locationResult);
-                    //Log.d(Constant.LOG_TAG, devicesLocationLatLong.getLatitude().toString());
-                    for (Location location : locationResult.getLocations()) {
-                        devicesLocationLatLong = new Latlong(location.getLatitude(), location.getLongitude());
-                        Log.d(Constant.LOG_TAG, devicesLocationLatLong.getLatitude().toString());
-                        //for calling  api method present in view model
-                        cityTempViewModel.callWeatherApi(devicesLocationLatLong);
+                        for (Location location : locationResult.getLocations()) {
+                            devicesLocationLatLong = new Latlong(location.getLatitude(), location.getLongitude());
+                            Log.d(Constant.LOG_TAG, devicesLocationLatLong.getLatitude().toString());
+                            //for calling  api method present in view model
+                            cityTempViewModel.callWeatherApi(devicesLocationLatLong);
+                        }
                     }
-                }
-            }, Looper.myLooper()).addOnSuccessListener(unused -> {
-                Log.d(Constant.LOG_TAG, "success idk");
-            }).addOnFailureListener(e -> {
-                Log.d(Constant.LOG_TAG, e.getMessage());
-            });
+
+                    @Override
+                    public void onLocationAvailability(@NonNull LocationAvailability locationAvailability) {
+                        super.onLocationAvailability(locationAvailability);
+                        Log.d(Constant.LOG_TAG + "available", String.valueOf(locationAvailability.isLocationAvailable()));
+                    }
+                }, Looper.myLooper());
+            }
 
         } else {
             Log.d(Constant.LOG_TAG + "y", "Requesting permission here");
